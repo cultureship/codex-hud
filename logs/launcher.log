@@ -1,0 +1,100 @@
+﻿2026-08-31 18:27:26.564 Launcher started
+2026-08-31 18:27:26.713 Attaching to running Codex process 19244 on CDP port 9335
+2026-08-31 18:27:26.954 HUD injected into renderer target A85C87F011F1351895554044FE3A18BB
+2026-08-31 18:51:36.479 Launcher started
+2026-08-31 18:51:36.800 Attaching to running Codex process 19244 on CDP port 9335
+2026-08-31 18:51:36.972 Ensured native window controls for Codex process 19244
+2026-08-31 18:51:37.632 HUD injected into renderer target A85C87F011F1351895554044FE3A18BB
+2026-08-31 18:51:37.637 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 19:08:39.755 Ensured native window controls for Codex process 19244
+2026-08-31 19:08:44.948 Ensured native window controls for Codex process 19244
+2026-08-31 19:16:56.936 Launcher started
+2026-08-31 19:16:57.295 ERROR Codex is already running without CDP. Exit Codex completely, then run this launcher again.
+2026-08-31 19:17:19.518 Launcher started
+2026-08-31 19:17:20.722 Activated package OpenAI.Codex as process 18544 on CDP port 9239
+2026-08-31 19:17:21.476 Waiting for renderer: Codex renderer target is not ready
+2026-08-31 19:17:26.568 Ensured native window controls for Codex process 18544
+2026-08-31 19:17:26.735 HUD injected into renderer target C605FC58AB6F01DB17E50986A391D1AC
+2026-08-31 19:17:57.398 Ensured native window controls for Codex process 18544
+2026-08-31 19:18:03.025 Ensured native window controls for Codex process 18544
+2026-08-31 19:18:08.288 HUD bound to active thread 01a04e25-ae18-7441-84ec-e45015f0e3b1; rollout usage loaded=True
+2026-08-31 19:20:46.818 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 19:31:08.627 HUD bound to active thread 01a04651-a31c-7f80-a84e-46bb296551f5; rollout usage loaded=True
+2026-08-31 19:31:29.304 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 19:36:41.467 HUD bound to active thread 01a04651-a31c-7f80-a84e-46bb296551f5; rollout usage loaded=True
+2026-08-31 19:37:12.438 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 19:47:01.010 Launcher started
+2026-08-31 19:47:01.203 Attaching to running Codex process 18544 on CDP port 9239
+2026-08-31 19:47:01.477 Waiting for renderer: 无法将“Get-FileHash”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。请检查名称的拼写，如果包括路径，请确保路径正确，然后再试一次。
+2026-08-31 19:47:06.603 Waiting for renderer: 无法将“Get-FileHash”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。请检查名称的拼写，如果包括路径，请确保路径正确，然后再试一次。
+2026-08-31 19:47:11.721 Waiting for renderer: 无法将“Get-FileHash”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。请检查名称的拼写，如果包括路径，请确保路径正确，然后再试一次。
+2026-08-31 19:47:16.843 Waiting for renderer: 无法将“Get-FileHash”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。请检查名称的拼写，如果包括路径，请确保路径正确，然后再试一次。
+2026-08-31 19:47:21.967 Waiting for renderer: 无法将“Get-FileHash”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。请检查名称的拼写，如果包括路径，请确保路径正确，然后再试一次。
+2026-08-31 19:47:27.083 FATAL Timed out waiting for the Codex renderer: 无法将“Get-FileHash”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。请检查名称的拼写，如果包括路径，请确保路径正确，然后再试一次。
+2026-08-31 19:47:52.471 Launcher started
+2026-08-31 19:47:52.630 Attaching to running Codex process 18544 on CDP port 9239
+2026-08-31 19:47:53.256 HUD injected into renderer target C605FC58AB6F01DB17E50986A391D1AC
+2026-08-31 19:47:53.260 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 19:48:08.771 hud.js change detected; scheduling hot reload
+2026-08-31 19:48:08.881 HUD hot reloaded in renderer target C605FC58AB6F01DB17E50986A391D1AC
+2026-08-31 19:56:43.759 Another launcher instance is already running
+2026-08-31 19:56:50.844 Another launcher instance is already running
+2026-08-31 19:57:04.737 Another launcher instance is already running
+2026-08-31 19:57:19.600 Another launcher instance is already running
+2026-08-31 19:57:23.163 Another launcher instance is already running
+2026-08-31 19:58:33.234 Another launcher instance is already running
+2026-08-31 19:58:44.630 Launcher started
+2026-08-31 19:58:45.890 Activated package OpenAI.Codex as process 5504 on CDP port 9239
+2026-08-31 19:58:48.060 HUD injected into renderer target 4ADCB807912AC6429DBB68CB8D5C0C6E
+2026-08-31 19:58:53.183 Ensured native window controls for Codex process 5504
+2026-08-31 19:59:23.887 Ensured native window controls for Codex process 5504
+2026-08-31 19:59:54.533 hud.js change detected; scheduling hot reload
+2026-08-31 19:59:54.849 HUD hot reloaded in renderer target 4ADCB807912AC6429DBB68CB8D5C0C6E
+2026-08-31 19:59:54.853 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 20:00:51.047 hud.js change detected; scheduling hot reload
+2026-08-31 20:00:51.080 HUD hot reloaded in renderer target 4ADCB807912AC6429DBB68CB8D5C0C6E
+2026-08-31 20:52:28.197 Ensured native window controls for Codex process 5504
+2026-08-31 21:04:48.221 Ensured native window controls for Codex process 5504
+2026-08-31 21:04:58.691 Ensured native window controls for Codex process 5504
+2026-08-31 21:05:11.175 Waiting for renderer: 使用“0”个参数调用“GetResult”时发生异常:“已取消一个任务。”
+2026-08-31 21:05:18.250 Waiting for renderer: 使用“0”个参数调用“GetResult”时发生异常:“已取消一个任务。”
+2026-08-31 21:05:25.420 Codex exited; launcher is stopping
+2026-08-31 23:04:16.333 Launcher started
+2026-08-31 23:04:17.499 Activated package OpenAI.Codex as process 2644 on CDP port 9239
+2026-08-31 23:04:18.296 Waiting for renderer: Codex renderer target is not ready
+2026-08-31 23:04:23.426 Ensured native window controls for Codex process 2644
+2026-08-31 23:04:23.729 HUD injected into renderer target A020C72565818B42BEAA02B70E4EEB36
+2026-08-31 23:04:54.570 Ensured native window controls for Codex process 2644
+2026-08-31 23:05:00.292 Ensured native window controls for Codex process 2644
+2026-08-31 23:05:33.307 Waiting for renderer: 使用“0”个参数调用“GetResult”时发生异常:“已取消一个任务。”
+2026-08-31 23:05:40.425 Waiting for renderer: 使用“0”个参数调用“GetResult”时发生异常:“已取消一个任务。”
+2026-08-31 23:05:47.644 Codex exited; launcher is stopping
+2026-08-31 23:17:28.593 Launcher started
+2026-08-31 23:17:28.842 Attaching to running Codex process 33156 on CDP port 9335
+2026-08-31 23:17:29.008 Ensured native window controls for Codex process 33156
+2026-08-31 23:17:29.419 HUD injected into renderer target AFFB76C8769DB66C32E2A02775C39FA6
+2026-08-31 23:17:29.423 HUD bound to active thread 01a0585c-011f-7271-a890-8ee673dd7e7c; rollout usage loaded=True
+2026-08-31 23:17:49.970 Ensured native window controls for Codex process 33156
+2026-08-31 23:18:10.932 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 23:18:41.764 HUD bound to active thread 01a0585c-011f-7271-a890-8ee673dd7e7c; rollout usage loaded=True
+2026-08-31 23:18:57.096 Ensured native window controls for Codex process 33156
+2026-08-31 23:18:57.187 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 23:19:12.525 Ensured native window controls for Codex process 33156
+2026-08-31 23:20:52.034 Launcher started
+2026-08-31 23:20:53.307 Activated package OpenAI.Codex as process 10512 on CDP port 9335
+2026-08-31 23:20:54.073 Waiting for renderer: Codex renderer target is not ready
+2026-08-31 23:20:59.180 Ensured native window controls for Codex process 10512
+2026-08-31 23:20:59.396 HUD injected into renderer target 1AD013FF0C0E3CE3AD161A559F13FBA0
+2026-08-31 23:21:30.091 Ensured native window controls for Codex process 10512
+2026-08-31 23:21:35.762 Ensured native window controls for Codex process 10512
+2026-08-31 23:23:53.860 HUD bound to active thread 01a0585c-011f-7271-a890-8ee673dd7e7c; rollout usage loaded=True
+2026-08-31 23:23:59.124 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 23:24:29.992 HUD bound to active thread 01a0585c-011f-7271-a890-8ee673dd7e7c; rollout usage loaded=True
+2026-08-31 23:25:16.242 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 23:25:36.708 HUD bound to active thread 01a0585c-011f-7271-a890-8ee673dd7e7c; rollout usage loaded=True
+2026-08-31 23:27:02.736 Launcher started
+2026-08-31 23:27:02.907 Attaching to running Codex process 10512 on CDP port 9335
+2026-08-31 23:27:03.576 HUD injected into renderer target 1AD013FF0C0E3CE3AD161A559F13FBA0
+2026-08-31 23:27:03.580 HUD bound to active thread 01a0585c-011f-7271-a890-8ee673dd7e7c; rollout usage loaded=True
+2026-08-31 23:27:34.735 HUD bound to active thread 01a0572f-54bc-7092-965b-d7d277252452; rollout usage loaded=True
+2026-08-31 23:27:45.058 HUD bound to active thread 01a0585c-011f-7271-a890-8ee673dd7e7c; rollout usage loaded=True
