@@ -720,6 +720,24 @@ function New-RolloutParserState {
     CurrentTurnActive = $false
     CurrentTurnUsage = New-UsageTable
     CurrentTurnPricingUsage = New-PricingUsageTable
+    LastCompletedTurnUsage = New-UsageTable
+    LastCompletedTurnPricingUsage = New-PricingUsageTable
+  }
+}
+
+function Copy-UsageTable($usage) {
+  return @{
+    input_tokens = [long]$usage.input_tokens
+    cached_input_tokens = [long]$usage.cached_input_tokens
+    output_tokens = [long]$usage.output_tokens
+    total_tokens = [long]$usage.total_tokens
+  }
+}
+
+function Copy-PricingUsageTable($usage) {
+  return @{
+    standard = Copy-UsageTable $usage.standard
+    long_context = Copy-UsageTable $usage.long_context
   }
 }
 
@@ -741,10 +759,17 @@ function Update-RolloutParserState($state, [string]$line) {
         $state.CurrentTurnPricingUsage = New-PricingUsageTable
       }
     } catch {}
-  } elseif ($line.IndexOf('"type":"task_complete"', [StringComparison]::Ordinal) -ge 0) {
+  } elseif (
+    $line.IndexOf('"type":"task_complete"', [StringComparison]::Ordinal) -ge 0 -or
+    $line.IndexOf('"type":"turn_aborted"', [StringComparison]::Ordinal) -ge 0
+  ) {
     try {
       $row = $line | ConvertFrom-Json
-      if ($row.payload.type -eq "task_complete" -and [string]$row.payload.turn_id -eq $state.CurrentTurnId) {
+      if ($row.payload.type -in @("task_complete", "turn_aborted") -and [string]$row.payload.turn_id -eq $state.CurrentTurnId) {
+        if ([long]$state.CurrentTurnUsage.total_tokens -gt 0) {
+          $state.LastCompletedTurnUsage = Copy-UsageTable $state.CurrentTurnUsage
+          $state.LastCompletedTurnPricingUsage = Copy-PricingUsageTable $state.CurrentTurnPricingUsage
+        }
         $state.CurrentTurnActive = $false
       }
     } catch {}
@@ -758,6 +783,18 @@ function Update-RolloutParserState($state, [string]$line) {
       if (-not $lastUsage -or -not $totalUsage) { return }
       $cumulativeTotal = [long]$totalUsage.total_tokens
       if ($cumulativeTotal -eq $state.LastCumulativeTotal) { return }
+      if ([long]$state.LastCumulativeTotal -lt 0) {
+        $baseline = @{
+          input_tokens = [Math]::Max([long]0, [long]$totalUsage.input_tokens - [long]$lastUsage.input_tokens)
+          cached_input_tokens = [Math]::Max([long]0, [long]$totalUsage.cached_input_tokens - [long]$lastUsage.cached_input_tokens)
+          output_tokens = [Math]::Max([long]0, [long]$totalUsage.output_tokens - [long]$lastUsage.output_tokens)
+          total_tokens = [Math]::Max([long]0, $cumulativeTotal - [long]$lastUsage.total_tokens)
+        }
+        if ([long]$baseline.total_tokens -gt 0) {
+          # A missing/deleted history base has no request boundaries, so retain its cumulative usage in the standard tier.
+          Add-UsageToTable $state.TieredUsage.standard $baseline
+        }
+      }
       $tierName = if ([long]$lastUsage.input_tokens -gt $longContextThresholdTokens) { "long_context" } else { "standard" }
       Add-UsageToTable $state.TieredUsage[$tierName] $lastUsage
       if ($state.CurrentTurnId) {
@@ -774,11 +811,141 @@ function Update-RolloutParserState($state, [string]$line) {
   }
 }
 
+function Get-RolloutSessionMeta([string]$path) {
+  $stream = $null
+  $reader = $null
+  try {
+    $stream = New-Object System.IO.FileStream(
+      $path,
+      [System.IO.FileMode]::Open,
+      [System.IO.FileAccess]::Read,
+      ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+    )
+    $reader = New-Object System.IO.StreamReader($stream, [Text.Encoding]::UTF8, $true)
+    $line = $reader.ReadLine()
+    if (-not $line) { return $null }
+    $row = $line | ConvertFrom-Json
+    if ($row.type -ne "session_meta") { return $null }
+    return $row.payload
+  } catch {
+    return $null
+  } finally {
+    if ($reader) { $reader.Dispose() }
+    if ($stream) { $stream.Dispose() }
+  }
+}
+
+function Get-RolloutThreadIdFromFile([string]$path) {
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return "" }
+  $meta = Get-RolloutSessionMeta $path
+  $threadId = if ($meta) { [string]$meta.session_id } else { "" }
+  if ($threadId -match "^[0-9a-fA-F-]{36}$") { return $threadId }
+  return ""
+}
+
+function Find-RolloutHistoryFile([string]$currentPath, [string]$threadId, [long]$minimumLength) {
+  if ($threadId -notmatch "^[0-9a-fA-F-]{36}$") { return $null }
+  $candidates = Get-ChildItem -LiteralPath $sessionRoot -Recurse -Filter "rollout-*$threadId*.jsonl" -File -ErrorAction SilentlyContinue |
+    Where-Object {
+      -not [string]::Equals($_.FullName, $currentPath, [StringComparison]::OrdinalIgnoreCase) -and
+      ($minimumLength -le 0 -or [long]$_.Length -ge $minimumLength)
+    } |
+    Sort-Object LastWriteTime -Descending
+  foreach ($candidate in $candidates) {
+    $meta = Get-RolloutSessionMeta $candidate.FullName
+    if ($meta -and [string]$meta.session_id -eq $threadId) { return $candidate.FullName }
+  }
+  return $null
+}
+
+function Import-RolloutStateFile($state, [string]$path, [long]$byteLimit, [long]$ordinalLimit, $visited) {
+  $visitKey = $path.ToLowerInvariant()
+  if ($visited.ContainsKey($visitKey)) { return }
+  $visited[$visitKey] = $true
+
+  $meta = Get-RolloutSessionMeta $path
+  $history = if ($meta) { $meta.PSObject.Properties["history_base"] } else { $null }
+  if ($history -and $history.Value) {
+    $historyThreadId = [string]$history.Value.thread_id
+    $byteProperty = $history.Value.PSObject.Properties["end_byte_offset"]
+    $ordinalProperty = $history.Value.PSObject.Properties["end_ordinal_exclusive"]
+    $historyByteLimit = if ($byteProperty) { [long]$byteProperty.Value } else { [long]-1 }
+    $historyOrdinalLimit = if ($ordinalProperty) { [long]$ordinalProperty.Value } else { [long]-1 }
+    $historyPath = Find-RolloutHistoryFile $path $historyThreadId $historyByteLimit
+    if ($historyPath) {
+      Import-RolloutStateFile $state $historyPath $historyByteLimit $historyOrdinalLimit $visited
+    }
+  }
+
+  $file = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+  if (-not $file) { return }
+  $readLength = [long]$file.Length
+  if ($byteLimit -ge 0) { $readLength = [Math]::Min($readLength, $byteLimit) }
+  if ($readLength -le 0) { return }
+  if ($readLength -gt [int]::MaxValue) { throw "Rollout history segment is too large to parse" }
+
+  $stream = $null
+  try {
+    $stream = New-Object System.IO.FileStream(
+      $path,
+      [System.IO.FileMode]::Open,
+      [System.IO.FileAccess]::Read,
+      ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+    )
+    $bytes = New-Object byte[] ([int]$readLength)
+    $read = 0
+    while ($read -lt $bytes.Length) {
+      $count = $stream.Read($bytes, $read, $bytes.Length - $read)
+      if ($count -le 0) { break }
+      $read += $count
+    }
+    $lastNewline = -1
+    for ($index = $read - 1; $index -ge 0; $index--) {
+      if ($bytes[$index] -eq 10) { $lastNewline = $index; break }
+    }
+    if ($lastNewline -lt 0) { return }
+    $text = [Text.Encoding]::UTF8.GetString($bytes, 0, $lastNewline + 1)
+    foreach ($line in $text.Split([char]10)) {
+      if ($line.Length -le 0) { continue }
+      $trimmed = $line.TrimEnd([char]13)
+      if ($ordinalLimit -ge 0) {
+        try {
+          $row = $trimmed | ConvertFrom-Json
+          $ordinal = $row.PSObject.Properties["ordinal"]
+          if ($ordinal -and [long]$ordinal.Value -ge $ordinalLimit) { continue }
+        } catch {}
+      }
+      Update-RolloutParserState $state $trimmed
+    }
+  } finally {
+    if ($stream) { $stream.Dispose() }
+  }
+}
+
+function Initialize-RolloutParserHistory($state, [string]$path) {
+  $meta = Get-RolloutSessionMeta $path
+  if (-not $meta) { return }
+  $history = $meta.PSObject.Properties["history_base"]
+  if (-not $history -or -not $history.Value) { return }
+  $historyThreadId = [string]$history.Value.thread_id
+  $byteProperty = $history.Value.PSObject.Properties["end_byte_offset"]
+  $ordinalProperty = $history.Value.PSObject.Properties["end_ordinal_exclusive"]
+  $byteLimit = if ($byteProperty) { [long]$byteProperty.Value } else { [long]-1 }
+  $ordinalLimit = if ($ordinalProperty) { [long]$ordinalProperty.Value } else { [long]-1 }
+  $historyPath = Find-RolloutHistoryFile $path $historyThreadId $byteLimit
+  if (-not $historyPath) { return }
+  $visited = @{}
+  $visited[$path.ToLowerInvariant()] = $true
+  Import-RolloutStateFile $state $historyPath $byteLimit $ordinalLimit $visited
+}
+
 function New-RolloutSnapshot($state) {
   if (-not $state.LastToken) { return $null }
   $state.LastToken.info | Add-Member -NotePropertyName pricing_tier_usage -NotePropertyValue $state.TieredUsage -Force
   $state.LastToken.info | Add-Member -NotePropertyName current_turn_usage -NotePropertyValue $state.CurrentTurnUsage -Force
   $state.LastToken.info | Add-Member -NotePropertyName current_turn_pricing_usage -NotePropertyValue $state.CurrentTurnPricingUsage -Force
+  $state.LastToken.info | Add-Member -NotePropertyName last_completed_turn_usage -NotePropertyValue $state.LastCompletedTurnUsage -Force
+  $state.LastToken.info | Add-Member -NotePropertyName last_completed_turn_pricing_usage -NotePropertyValue $state.LastCompletedTurnPricingUsage -Force
   $state.LastToken.info | Add-Member -NotePropertyName current_turn_active -NotePropertyValue $state.CurrentTurnActive -Force
   $state.LastToken.info | Add-Member -NotePropertyName current_turn_id -NotePropertyValue $state.CurrentTurnId -Force
   return @{ model = $state.LastModel; payload = $state.LastToken }
@@ -789,8 +956,16 @@ function Get-RolloutSnapshot([string]$threadId) {
   if (-not $path) { return $null }
   $file = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
   if (-not $file) { return $null }
-  $state = if ($rolloutSnapshotCache.ContainsKey($path)) { $rolloutSnapshotCache[$path] } else { New-RolloutParserState }
-  if ([long]$file.Length -lt [long]$state.Offset) { $state = New-RolloutParserState }
+  if ($rolloutSnapshotCache.ContainsKey($path)) {
+    $state = $rolloutSnapshotCache[$path]
+  } else {
+    $state = New-RolloutParserState
+    Initialize-RolloutParserHistory $state $path
+  }
+  if ([long]$file.Length -lt [long]$state.Offset) {
+    $state = New-RolloutParserState
+    Initialize-RolloutParserHistory $state $path
+  }
   $remaining = [long]$file.Length - [long]$state.Offset
   if ($remaining -le 0) { return New-RolloutSnapshot $state }
   if ($remaining -gt [int]::MaxValue) { throw "Rollout append is too large to parse" }
@@ -829,7 +1004,15 @@ function Get-RolloutSnapshot([string]$threadId) {
   return New-RolloutSnapshot $state
 }
 
-function Install-Hud([string]$webSocketUrl, [string]$source, [bool]$installForNewDocuments, [bool]$forceReload, [int]$port) {
+function Install-Hud(
+  [string]$webSocketUrl,
+  [string]$source,
+  [bool]$installForNewDocuments,
+  [bool]$forceReload,
+  [int]$port,
+  [string]$fallbackThreadId = "",
+  [string]$preferredThreadId = ""
+) {
   Assert-SafeWebSocketUrl $webSocketUrl $port
   $socket = New-Object System.Net.WebSockets.ClientWebSocket
   try {
@@ -865,12 +1048,24 @@ function Install-Hud([string]$webSocketUrl, [string]$source, [bool]$installForNe
       returnByValue = $true
     }
     $threadId = [string](Get-CdpValue $threadResponse)
+    if ($preferredThreadId -match "^[0-9a-fA-F-]{36}$") {
+      $threadId = $preferredThreadId
+    } elseif (-not $threadId -and $fallbackThreadId) {
+      $threadId = $fallbackThreadId
+    }
     $snapshot = Get-RolloutSnapshot $threadId
     $usageLoaded = $false
-    $inspectPayload = @{ cost_summary = $costSummary }
+    $inspectPayload = @{
+      cost_summary = $costSummary
+      __codex_hud_context = @{
+        thread_id = $threadId
+        usage_available = $false
+      }
+    }
     if ($snapshot) {
       $inspectPayload.model = $snapshot.model
       $inspectPayload.payload = $snapshot.payload
+      $inspectPayload.__codex_hud_context.usage_available = $true
       $usageLoaded = $true
     }
     $snapshotJson = $inspectPayload | ConvertTo-Json -Compress -Depth 20
@@ -937,6 +1132,7 @@ try {
   $target = $null
   $rolloutSyncPending = $false
   $rolloutSyncDue = [DateTime]::MinValue
+  $rolloutSyncPath = ""
 
   while ($true) {
     try {
@@ -970,6 +1166,7 @@ try {
         installForNewDocuments = $needsReload
         forceReload = $needsReload
         port = $debugPort
+        fallbackThreadId = $lastLoggedThreadId
       }
       $sync = Install-Hud @installParameters
       $targetRevisions[$targetId] = $hudRevision
@@ -1013,17 +1210,33 @@ try {
           if ($lastLoggedThreadId -and $changedPath.IndexOf($lastLoggedThreadId, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
             $rolloutSyncPending = $true
             $rolloutSyncDue = [DateTime]::UtcNow.AddMilliseconds(100)
+          } elseif ($sourceIdentifier -eq $rolloutEventSources[1]) {
+            $rolloutSyncPending = $true
+            $rolloutSyncPath = $changedPath
+            $rolloutSyncDue = [DateTime]::UtcNow.AddMilliseconds(100)
           }
         }
       }
       if ($rolloutSyncPending -and [DateTime]::UtcNow -ge $rolloutSyncDue -and $null -ne $target) {
         try {
-          $eventSync = Install-Hud ([string]$target.webSocketDebuggerUrl) $hudSource $false $false $debugPort
-          if ($eventSync.ThreadId) { $lastLoggedThreadId = $eventSync.ThreadId }
+          $preferredThreadId = if ($rolloutSyncPath) { Get-RolloutThreadIdFromFile $rolloutSyncPath } else { "" }
+          if ($rolloutSyncPath -and -not $preferredThreadId) {
+            $rolloutSyncDue = [DateTime]::UtcNow.AddMilliseconds(100)
+            continue
+          }
+          $eventSync = Install-Hud ([string]$target.webSocketDebuggerUrl) $hudSource $false $false $debugPort $lastLoggedThreadId $preferredThreadId
+          if ($eventSync.ThreadId) {
+            if ($eventSync.ThreadId -ne $lastLoggedThreadId) {
+              Write-Log "New rollout synchronized to thread $($eventSync.ThreadId); rollout usage loaded=$($eventSync.UsageLoaded)"
+            }
+            $lastLoggedThreadId = $eventSync.ThreadId
+          }
           $rolloutSyncPending = $false
+          $rolloutSyncPath = ""
         } catch {
           Write-Log "Rollout change synchronization failed: $($_.Exception.Message)"
           $rolloutSyncPending = $false
+          $rolloutSyncPath = ""
           break
         }
       }
@@ -1047,7 +1260,7 @@ try {
       }
       if ($newestThreadId -and $newestThreadId -ne $lastLoggedThreadId) {
         try {
-          $eventSync = Install-Hud ([string]$target.webSocketDebuggerUrl) $hudSource $false $false $debugPort
+          $eventSync = Install-Hud ([string]$target.webSocketDebuggerUrl) $hudSource $false $false $debugPort $lastLoggedThreadId $newestThreadId
           if ($eventSync.ThreadId) {
             $lastLoggedThreadId = $eventSync.ThreadId
             Write-Log "Sidebar switch synchronized to thread $($eventSync.ThreadId); rollout usage loaded=$($eventSync.UsageLoaded)"

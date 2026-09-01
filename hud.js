@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.5.23";
+  const VERSION = "0.5.35";
   const CONFIG = __CODEX_HUD_CONFIG__;
   const CONFIG_KEY = JSON.stringify(CONFIG);
   const ROOT_ID = "codex-hud-root";
@@ -24,11 +24,16 @@
     model: "",
     current: emptyUsage(),
     currentPricingUsage: emptyPricingUsage(),
+    lastCompleted: emptyUsage(),
+    lastCompletedPricingUsage: emptyPricingUsage(),
     session: emptyUsage(),
     sessionPricingUsage: null,
+    sessionAvailable: false,
+    activeThreadId: "",
     todayCost: null,
     weekCost: null,
     generating: false,
+    rolloutTurnActive: null,
     pendingTurnStart: false,
     generationEndTimer: null,
     suppressStopUntilGone: false,
@@ -40,8 +45,11 @@
     appearanceTimer: null,
     domSyncScheduled: false,
     newChatPage: null,
+    newChatIntent: false,
+    normalComposerAppearance: { background: "", radius: "", shadow: "" },
     messageHandler: null,
     bridgeHandler: null,
+    navigationHandler: null,
     originals: {},
   };
 
@@ -117,6 +125,22 @@
     return { ...target, [tier]: addUsage(target[tier], usage) };
   }
 
+  function resetThreadUsage() {
+    state.current = emptyUsage();
+    state.currentPricingUsage = emptyPricingUsage();
+    state.lastCompleted = emptyUsage();
+    state.lastCompletedPricingUsage = emptyPricingUsage();
+    state.session = emptyUsage();
+    state.sessionPricingUsage = null;
+    state.sessionAvailable = false;
+    state.turnHasUsage = false;
+    state.turnId = "";
+    state.rolloutTurnActive = null;
+    state.generating = detectGenerating();
+    state.pendingTurnStart = state.generating;
+    state.suppressStopUntilGone = false;
+  }
+
   function parseText(text) {
     const value = String(text || "").trim();
     if (!value) return [];
@@ -180,22 +204,44 @@
         changed = true;
       }
 
+      const hudContext = node.__codex_hud_context;
+      if (hudContext && typeof hudContext === "object") {
+        const nextThreadId = String(hudContext.thread_id || "");
+        const threadChanged = nextThreadId !== state.activeThreadId;
+        if (threadChanged) {
+          resetThreadUsage();
+          if (nextThreadId) state.newChatIntent = false;
+          changed = true;
+        }
+        state.activeThreadId = nextThreadId;
+      }
+
       const nodeType = String(node.type || "");
       if (nodeType === "task_started") {
         const turnId = String(node.turn_id || node.turnId || node.id || "");
+        if (state.suppressStopUntilGone) return;
+        const replayedWhileIdle = !state.generating && !state.pendingTurnStart && !detectGenerating();
+        const differentTurnWhileActive = state.generating
+          && !state.pendingTurnStart
+          && Boolean(state.turnId && turnId && turnId !== state.turnId);
+        if (replayedWhileIdle || differentTurnWhileActive) return;
         if (!state.pendingTurnStart && (!state.generating || (turnId && turnId !== state.turnId))) {
+          rememberCurrentTurn();
           state.current = emptyUsage();
           state.currentPricingUsage = emptyPricingUsage();
           state.turnHasUsage = false;
         }
         state.turnId = turnId;
+        state.rolloutTurnActive = true;
+        state.newChatIntent = false;
         state.generating = true;
         state.pendingTurnStart = false;
         changed = true;
-      } else if (nodeType === "task_complete") {
+      } else if (nodeType === "task_complete" || nodeType === "turn_aborted") {
         const turnId = String(node.turn_id || node.turnId || node.id || "");
         const exactTurn = Boolean(turnId && state.turnId && turnId === state.turnId);
         if (exactTurn || (!state.pendingTurnStart && (!turnId || !state.turnId || turnId === state.turnId))) {
+          state.rolloutTurnActive = false;
           finishGenerating();
           changed = true;
         }
@@ -219,15 +265,25 @@
         const currentTurnPricing = normalizePricingUsage(
           tokenNode.info.current_turn_pricing_usage || tokenNode.info.currentTurnPricingUsage,
         );
+        const lastCompletedTurn = normalizeUsage(
+          tokenNode.info.last_completed_turn_usage || tokenNode.info.lastCompletedTurnUsage,
+        );
+        const lastCompletedTurnPricing = normalizePricingUsage(
+          tokenNode.info.last_completed_turn_pricing_usage || tokenNode.info.lastCompletedTurnPricingUsage,
+        );
+        if (lastCompletedTurn?.total > 0) {
+          state.lastCompleted = lastCompletedTurn;
+          state.lastCompletedPricingUsage = lastCompletedTurnPricing || emptyPricingUsage();
+        }
         const hasCurrentTurnActive = Object.prototype.hasOwnProperty.call(tokenNode.info, "current_turn_active")
           || Object.prototype.hasOwnProperty.call(tokenNode.info, "currentTurnActive");
         const snapshotTurnActive = hasCurrentTurnActive
           ? Boolean(tokenNode.info.current_turn_active ?? tokenNode.info.currentTurnActive)
           : null;
         const snapshotTurnId = String(tokenNode.info.current_turn_id || tokenNode.info.currentTurnId || "");
-        const staleCompletedSnapshot = state.pendingTurnStart
-          && snapshotTurnActive === false
-          && detectGenerating();
+        const staleCompletedSnapshot = snapshotTurnActive === false && detectGenerating();
+
+        if (hasCurrentTurnActive) state.rolloutTurnActive = snapshotTurnActive;
 
         if (currentTurn && !staleCompletedSnapshot) {
           state.current = currentTurn;
@@ -256,6 +312,7 @@
         }
         if (session) {
           state.session = session;
+          state.sessionAvailable = session.total > 0;
           changed = true;
         }
         if (pricingUsage) {
@@ -456,7 +513,7 @@
         white-space: nowrap;
       }
       #${ROOT_ID}[data-template="2"] .codex-hud-inline-stat[data-stat="input"] { width: 76px; }
-      #${ROOT_ID}[data-template="2"] .codex-hud-inline-stat[data-stat="output"] { width: 76px; }
+      #${ROOT_ID}[data-template="2"] .codex-hud-inline-stat[data-stat="output"] { width: 84px; }
       #${ROOT_ID}[data-template="2"] .codex-hud-inline-stat[data-stat="session"] { width: 90px; }
       #${ROOT_ID}[data-template="2"] .codex-hud-inline-stat[data-stat="cache"] { width: 68px; }
       #${ROOT_ID}[data-template="2"] .codex-hud-inline-stat[data-stat="turn"] { width: 82px; }
@@ -586,7 +643,9 @@
 
   function detectNewChatPage() {
     if (!visibleComposerEditor()) return false;
-    if (visibleChooseProject() || !selectedThreadId()) return true;
+    if (detectGenerating() || state.rolloutTurnActive === true) return false;
+    if (state.newChatIntent) return true;
+    if (visibleChooseProject()) return true;
     const chatActions = [...document.querySelectorAll('button[aria-label="Chat actions"], button[aria-label="聊天操作"]')]
       .some((button) => button.getClientRects().length > 0);
     return !chatActions;
@@ -651,15 +710,31 @@
   function syncComposerAppearance(root, mount = composerMount()) {
     if (!root || !mount?.layoutRoot || uiTemplate() !== 2) return;
     const style = getComputedStyle(mount.layoutRoot);
-    const background = opaqueColor(composerBackground(root, mount.layoutRoot));
-    const previousRadius = root.style.getPropertyValue("--codex-hud-composer-radius").trim();
-    const radius = transparentColor(style.backgroundColor)
-      ? previousRadius || "25px"
-      : style.borderRadius || previousRadius || "25px";
+    const newChatPage = detectNewChatPage();
+    const savedAppearance = state.normalComposerAppearance;
+    const previousBackground = root.style.getPropertyValue("--codex-hud-composer-bg").trim()
+      || savedAppearance.background;
+    const previousRadius = root.style.getPropertyValue("--codex-hud-composer-radius").trim()
+      || savedAppearance.radius;
+    const previousShadow = root.style.getPropertyValue("--codex-hud-composer-shadow").trim()
+      || savedAppearance.shadow;
+    const reuseNormalAppearance = newChatPage && Boolean(savedAppearance.background);
+    const background = reuseNormalAppearance
+      ? savedAppearance.background
+      : opaqueColor(composerBackground(root, mount.layoutRoot));
+    const radius = reuseNormalAppearance
+      ? savedAppearance.radius || "25px"
+      : transparentColor(style.backgroundColor)
+        ? previousRadius || "25px"
+        : style.borderRadius || previousRadius || "25px";
+    const shadow = reuseNormalAppearance ? savedAppearance.shadow : style.boxShadow;
+    if (!newChatPage) {
+      state.normalComposerAppearance = { background, radius, shadow };
+    }
     const properties = {
       "--codex-hud-composer-bg": background,
       "--codex-hud-composer-radius": radius,
-      "--codex-hud-composer-shadow": style.boxShadow,
+      "--codex-hud-composer-shadow": shadow,
     };
     for (const [name, value] of Object.entries(properties)) {
       if (value && root.style.getPropertyValue(name) !== value) root.style.setProperty(name, value);
@@ -667,7 +742,8 @@
     if (root.dataset.transparent === "false") {
       root.style.setProperty("background-color", background, "important");
       root.style.setProperty("border-radius", radius, "important");
-      root.style.setProperty("box-shadow", style.boxShadow, "important");
+      if (shadow) root.style.setProperty("box-shadow", shadow, "important");
+      else root.style.removeProperty("box-shadow");
     } else {
       root.style.removeProperty("background-color");
       root.style.removeProperty("border-radius");
@@ -760,6 +836,15 @@
       .some((button) => button.getClientRects().length > 0);
   }
 
+  function rememberCurrentTurn() {
+    if (state.current.total <= 0) return;
+    state.lastCompleted = { ...state.current };
+    state.lastCompletedPricingUsage = {
+      standard: { ...state.currentPricingUsage.standard },
+      longContext: { ...state.currentPricingUsage.longContext },
+    };
+  }
+
   function composerHasDraft() {
     const editor = visibleComposerEditor();
     return Boolean(editor && String(editor.textContent || "").trim());
@@ -770,19 +855,30 @@
       clearTimeout(state.generationEndTimer);
       state.generationEndTimer = null;
     }
+    rememberCurrentTurn();
+    if (state.current.total <= 0 && state.lastCompleted.total > 0) {
+      state.current = { ...state.lastCompleted };
+      state.currentPricingUsage = {
+        standard: { ...state.lastCompletedPricingUsage.standard },
+        longContext: { ...state.lastCompletedPricingUsage.longContext },
+      };
+      state.turnHasUsage = true;
+    }
     state.generating = false;
+    state.rolloutTurnActive = false;
     state.pendingTurnStart = false;
     state.suppressStopUntilGone = detectGenerating();
   }
 
   function scheduleGenerationEnd() {
     if (state.generationEndTimer) return;
+    const delay = composerHasDraft() ? 1200 : 750;
     state.generationEndTimer = setTimeout(() => {
       state.generationEndTimer = null;
-      if (detectGenerating() || composerHasDraft()) return;
+      if (detectGenerating() || state.rolloutTurnActive === true) return;
       finishGenerating();
       render();
-    }, 750);
+    }, delay);
   }
 
   function syncGenerating() {
@@ -793,10 +889,10 @@
       }
       return;
     }
-    const generating = detectGenerating();
+    const generating = detectGenerating() || state.rolloutTurnActive === true;
     if (!generating) {
       state.suppressStopUntilGone = false;
-      if (state.generating && !composerHasDraft()) scheduleGenerationEnd();
+      if (state.generating) scheduleGenerationEnd();
       return;
     }
     if (state.generationEndTimer) {
@@ -804,6 +900,7 @@
       state.generationEndTimer = null;
     }
     if (state.suppressStopUntilGone || state.generating) return;
+    rememberCurrentTurn();
     state.current = emptyUsage();
     state.currentPricingUsage = emptyPricingUsage();
     state.turnHasUsage = false;
@@ -817,20 +914,23 @@
     const root = ensureRoot();
     if (!root) return;
     const newChatPage = detectNewChatPage();
+    if (newChatPage && state.newChatPage !== true) resetThreadUsage();
     if (newChatPage && (state.generating || state.pendingTurnStart)) finishGenerating();
     state.newChatPage = newChatPage;
     root.dataset.newChat = String(newChatPage);
     root.dataset.transparent = String(newChatPage ? false : CONFIG.transparent === true);
     syncComposerAppearance(root);
     const waitingForUsage = state.generating && !state.turnHasUsage;
+    const turnUnavailable = !state.generating && !state.sessionAvailable;
+    const sessionUnavailable = !state.sessionAvailable;
     root.dataset.activeTurn = String(state.generating && state.turnHasUsage);
     setValue(root, "model", state.model || "");
-    setValue(root, "turn-input", newChatPage ? "--" : waitingForUsage ? "..." : formatCount(state.current.input));
-    setValue(root, "turn-output", newChatPage ? "--" : waitingForUsage ? "..." : formatCount(state.current.output));
-    setValue(root, "session-total", newChatPage ? "--" : formatCount(state.session.total));
-    setValue(root, "cache-rate", newChatPage ? "--" : cachePercent(state.session));
-    setValue(root, "turn-cost", newChatPage ? "--" : waitingForUsage ? "..." : formatMoney(usageCost(state.current, state.currentPricingUsage)));
-    setValue(root, "session-cost", newChatPage ? "--" : formatMoney(usageCost(state.session, state.sessionPricingUsage)));
+    setValue(root, "turn-input", newChatPage || turnUnavailable ? "--" : waitingForUsage ? "..." : formatCount(state.current.input));
+    setValue(root, "turn-output", newChatPage || turnUnavailable ? "--" : waitingForUsage ? "..." : formatCount(state.current.output));
+    setValue(root, "session-total", newChatPage || sessionUnavailable ? "--" : formatCount(state.session.total));
+    setValue(root, "cache-rate", newChatPage || sessionUnavailable ? "--" : cachePercent(state.session));
+    setValue(root, "turn-cost", newChatPage || turnUnavailable ? "--" : waitingForUsage ? "..." : formatMoney(usageCost(state.current, state.currentPricingUsage)));
+    setValue(root, "session-cost", newChatPage || sessionUnavailable ? "--" : formatMoney(usageCost(state.session, state.sessionPricingUsage)));
     setValue(root, "today-cost", formatMoney(state.todayCost));
     setValue(root, "week-cost", formatMoney(state.weekCost));
   }
@@ -903,6 +1003,7 @@
     if (state.generationEndTimer) clearTimeout(state.generationEndTimer);
     if (state.messageHandler) window.removeEventListener("message", state.messageHandler, true);
     if (state.bridgeHandler) window.removeEventListener("codex-message-from-view", state.bridgeHandler, true);
+    if (state.navigationHandler) document.removeEventListener("click", state.navigationHandler, true);
     if (state.originals.fetch && window.fetch?.name === "codexHudFetch") window.fetch = state.originals.fetch;
     if (state.originals.webSocket && window.WebSocket?.name === "CodexHudWebSocket") window.WebSocket = state.originals.webSocket;
     const Xhr = window.XMLHttpRequest;
@@ -914,6 +1015,25 @@
   }
 
   installCapture();
+  state.navigationHandler = (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    if (target.closest('[data-app-action-sidebar-thread-id]')) {
+      state.newChatIntent = false;
+      return;
+    }
+    const control = target.closest('button, [role="button"]');
+    const label = String(control?.getAttribute("aria-label") || "").trim();
+    const text = String(control?.textContent || "").trim();
+    if (
+      /^(?:New chat|新建聊天)$|^Start new chat in /i.test(label) ||
+      /^(?:New chat|新建聊天)$/i.test(text)
+    ) {
+      state.newChatIntent = true;
+      render();
+    }
+  };
+  document.addEventListener("click", state.navigationHandler, true);
   state.observer = new MutationObserver(() => {
     if (state.domSyncScheduled) return;
     state.domSyncScheduled = true;
