@@ -6,7 +6,6 @@
 
 <p align="center">
   <strong>An in-app Token and Cost HUD for Codex Desktop, injected through CDP and compatible with Sub2API</strong><br>
-  External theme support · Local CDP injection · No modification of the official installation
 </p>
 
 This is an unofficial project that does not modify Codex installation files or create an external window, tray icon, HTTP service, or standalone statistics page
