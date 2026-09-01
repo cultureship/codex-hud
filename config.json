@@ -2,13 +2,65 @@
   "debugPort": 9335,
   "pollIntervalMs": 5000,
   "hotReload": true,
+  "cleanupOldLogs": true,
+  "cleanupOldLedger": true,
+  "uiTemplate": 2,
+  "transparent": false,
+  "priceMultiplier": 0.15,
+  "activeTurnColor": "#f59e0b",
+  "longContextThresholdTokens": 272000,
   "codexPath": "",
   "prices": {
-    "gpt-5.6-sol": { "input": 5.0, "cachedInput": 0.5, "output": 30.0 },
-    "gpt-5.6-terra": { "input": 2.0, "cachedInput": 0.2, "output": 12.0 },
-    "gpt-5.6-luna": { "input": 0.2, "cachedInput": 0.02, "output": 1.2 },
-    "gpt-5.5": { "input": 5.0, "cachedInput": 0.5, "output": 30.0 },
-    "gpt-5.4": { "input": 2.5, "cachedInput": 0.25, "output": 15.0 },
+    "gpt-5.6-sol": {
+      "input": 5.0,
+      "cachedInput": 0.5,
+      "output": 30.0,
+      "longContext": {
+        "input": 10.0,
+        "cachedInput": 1.0,
+        "output": 45.0
+      }
+    },
+    "gpt-5.6-terra": {
+      "input": 2.0,
+      "cachedInput": 0.2,
+      "output": 12.0,
+      "longContext": {
+        "input": 4.0,
+        "cachedInput": 0.4,
+        "output": 18.0
+      }
+    },
+    "gpt-5.6-luna": {
+      "input": 0.4,
+      "cachedInput": 0.08,
+      "output": 2.4,
+      "longContext": {
+        "input": 0.8,
+        "cachedInput": 0.16,
+        "output": 3.6
+      }
+    },
+    "gpt-5.5": {
+      "input": 5.0,
+      "cachedInput": 0.5,
+      "output": 30.0,
+      "longContext": {
+        "input": 10.0,
+        "cachedInput": 1.0,
+        "output": 45.0
+      }
+    },
+    "gpt-5.4": {
+      "input": 2.5,
+      "cachedInput": 0.25,
+      "output": 15.0,
+      "longContext": {
+        "input": 5.0,
+        "cachedInput": 0.5,
+        "output": 22.5
+      }
+    },
     "gpt-5.4-mini": { "input": 0.75, "cachedInput": 0.075, "output": 4.5 },
     "gpt-5.3-codex": { "input": 1.75, "cachedInput": 0.175, "output": 14.0 }
   }
