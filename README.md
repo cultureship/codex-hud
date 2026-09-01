@@ -6,7 +6,6 @@
 
 <p align="center">
   <strong>通过 CDP 注入到 Codex Desktop 内部的 Token 与 Cost HUD，适用于 Sub2API</strong><br>
-  外部主题 / 换肤工具 · 本机 CDP 注入 · 不改官方安装包
 </p>
 
 本项目非官方，不会修改 Codex 安装文件，也不会创建外部窗口、托盘、HTTP 服务或独立统计页面。
