@@ -1,4 +1,6 @@
-param()
+param(
+  [switch]$AttachOnly
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -125,19 +127,22 @@ namespace CodexHud {
     private static extern IntPtr SetWindowLongPtr64(IntPtr window, int index, IntPtr value);
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")]
+    private static extern bool IsZoomed(IntPtr window);
 
-    public static bool EnsureSystemMenu(IntPtr window) {
-      if (window == IntPtr.Zero) return false;
+    public static int SyncSystemMenu(IntPtr window) {
+      if (window == IntPtr.Zero) return 0;
       const int GWL_STYLE = -16;
       const long WS_SYSMENU = 0x00080000L;
       const uint FLAGS = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020;
       long style = GetWindowLongPtr64(window, GWL_STYLE).ToInt64();
-      if ((style & WS_SYSMENU) == 0) {
-        SetWindowLongPtr64(window, GWL_STYLE, new IntPtr(style | WS_SYSMENU));
-        SetWindowPos(window, IntPtr.Zero, 0, 0, 0, 0, FLAGS);
-        return true;
-      }
-      return false;
+      bool hasSystemMenu = (style & WS_SYSMENU) != 0;
+      bool shouldHaveSystemMenu = IsZoomed(window);
+      if (hasSystemMenu == shouldHaveSystemMenu) return 0;
+      long nextStyle = shouldHaveSystemMenu ? style | WS_SYSMENU : style & ~WS_SYSMENU;
+      SetWindowLongPtr64(window, GWL_STYLE, new IntPtr(nextStyle));
+      SetWindowPos(window, IntPtr.Zero, 0, 0, 0, 0, FLAGS);
+      return shouldHaveSystemMenu ? 1 : -1;
     }
   }
 }
@@ -149,8 +154,11 @@ function Ensure-CodexWindowControls($process) {
   try {
     Add-WindowControlType
     $nativeProcess = Get-Process -Id $process.ProcessId -ErrorAction Stop
-    if ([CodexHud.WindowControls]::EnsureSystemMenu($nativeProcess.MainWindowHandle)) {
+    $action = [CodexHud.WindowControls]::SyncSystemMenu($nativeProcess.MainWindowHandle)
+    if ($action -eq 1) {
       Write-Log "Ensured native window controls for Codex process $($process.ProcessId)"
+    } elseif ($action -eq -1) {
+      Write-Log "Removed duplicate native window controls for windowed Codex process $($process.ProcessId)"
     }
   } catch {
     Write-Log "Window control repair skipped: $($_.Exception.Message)"
@@ -1105,6 +1113,9 @@ try {
     }
     Write-Log "Attaching to running Codex process $($mainProcess.ProcessId) on CDP port $debugPort"
   } else {
+    if ($AttachOnly) {
+      Fail "Attach-only mode requires a running Codex process with CDP enabled"
+    }
     $debugPort = $requestedPort
     if (Test-LoopbackPort $debugPort) { Fail "Configured CDP port $debugPort is already in use" }
     Start-CodexWithCdp $debugPort

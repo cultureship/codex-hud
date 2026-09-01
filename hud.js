@@ -1,12 +1,13 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.5.35";
+  const VERSION = "0.5.39";
   const CONFIG = __CODEX_HUD_CONFIG__;
   const CONFIG_KEY = JSON.stringify(CONFIG);
   const ROOT_ID = "codex-hud-root";
   const STYLE_ID = "codex-hud-style";
   const POSITION_KEY = "codex-hud-position-v2";
+  const APPEARANCE_CACHE_KEY = "codex-hud-composer-appearance-v1";
   const TITLEBAR_GUARD = 40;
 
   if (window.top !== window || window.self !== window || !/^app:\/\/-\//i.test(window.location.href)) return;
@@ -47,6 +48,7 @@
     newChatPage: null,
     newChatIntent: false,
     normalComposerAppearance: { background: "", radius: "", shadow: "" },
+    composerAppearanceCache: loadComposerAppearanceCache(),
     messageHandler: null,
     bridgeHandler: null,
     navigationHandler: null,
@@ -688,29 +690,96 @@
     return false;
   }
 
+  function loadComposerAppearanceCache() {
+    try {
+      const value = JSON.parse(localStorage.getItem(APPEARANCE_CACHE_KEY) || "{}");
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function composerAppearanceKey(layoutRoot) {
+    const style = getComputedStyle(layoutRoot);
+    const pageStyle = getComputedStyle(document.documentElement);
+    return JSON.stringify([
+      document.documentElement.className,
+      document.documentElement.getAttribute("data-theme") || "",
+      document.documentElement.getAttribute("data-color-theme") || "",
+      pageStyle.colorScheme,
+      style.getPropertyValue("--color-background-elevated-secondary-opaque").trim(),
+      style.getPropertyValue("--color-token-bg-primary").trim(),
+      style.getPropertyValue("--color-token-border-default").trim(),
+      style.getPropertyValue("--color-token-text-primary").trim(),
+    ]);
+  }
+
+  function cachedComposerAppearance(key) {
+    const value = state.composerAppearanceCache[key];
+    if (!value || typeof value !== "object") return null;
+    const background = String(value.background || "").trim();
+    const radius = String(value.radius || "").trim();
+    const shadow = String(value.shadow || "").trim();
+    return background ? { background, radius, shadow } : null;
+  }
+
+  function saveComposerAppearance(key, appearance) {
+    if (!key || !appearance.background) return;
+    const previous = cachedComposerAppearance(key);
+    if (
+      previous?.background === appearance.background &&
+      previous.radius === appearance.radius &&
+      previous.shadow === appearance.shadow
+    ) return;
+    state.composerAppearanceCache[key] = appearance;
+    const keys = Object.keys(state.composerAppearanceCache);
+    for (const staleKey of keys.slice(0, Math.max(0, keys.length - 12))) {
+      delete state.composerAppearanceCache[staleKey];
+    }
+    try {
+      localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(state.composerAppearanceCache));
+    } catch {}
+  }
+
   function composerBackground(root, layoutRoot) {
     const style = getComputedStyle(layoutRoot);
     const candidates = [
       style.backgroundColor,
       getComputedStyle(layoutRoot, "::before").backgroundColor,
       getComputedStyle(layoutRoot, "::after").backgroundColor,
+      style.getPropertyValue("--color-background-elevated-secondary-opaque"),
+      style.getPropertyValue("--color-token-bg-primary"),
     ];
     let ancestor = layoutRoot.parentElement;
     for (let depth = 0; ancestor && depth < 3; depth++, ancestor = ancestor.parentElement) {
       candidates.push(getComputedStyle(ancestor).backgroundColor);
     }
-    candidates.push(
-      root.style.getPropertyValue("--codex-hud-composer-bg"),
-      style.getPropertyValue("--color-background-elevated-secondary-opaque"),
-      style.getPropertyValue("--color-token-bg-primary"),
-    );
+    candidates.push(root.style.getPropertyValue("--codex-hud-composer-bg"));
     return candidates.map((value) => String(value || "").trim()).find((value) => !transparentColor(value)) || "";
+  }
+
+  function measureComposerAppearance(root, layoutRoot, fallback) {
+    const style = getComputedStyle(layoutRoot);
+    const beforeStyle = getComputedStyle(layoutRoot, "::before");
+    const afterStyle = getComputedStyle(layoutRoot, "::after");
+    const shadowCandidates = [style.boxShadow, beforeStyle.boxShadow, afterStyle.boxShadow];
+    let ancestor = layoutRoot.parentElement;
+    for (let depth = 0; ancestor && depth < 2; depth++, ancestor = ancestor.parentElement) {
+      shadowCandidates.push(getComputedStyle(ancestor).boxShadow);
+    }
+    const measuredBackground = opaqueColor(composerBackground(root, layoutRoot));
+    const shadow = shadowCandidates
+      .map((value) => String(value || "").trim())
+      .find((value) => value && value !== "none") || style.boxShadow || fallback.shadow;
+    return {
+      background: measuredBackground || fallback.background,
+      radius: style.borderRadius || fallback.radius || "25px",
+      shadow,
+    };
   }
 
   function syncComposerAppearance(root, mount = composerMount()) {
     if (!root || !mount?.layoutRoot || uiTemplate() !== 2) return;
-    const style = getComputedStyle(mount.layoutRoot);
-    const newChatPage = detectNewChatPage();
     const savedAppearance = state.normalComposerAppearance;
     const previousBackground = root.style.getPropertyValue("--codex-hud-composer-bg").trim()
       || savedAppearance.background;
@@ -718,19 +787,15 @@
       || savedAppearance.radius;
     const previousShadow = root.style.getPropertyValue("--codex-hud-composer-shadow").trim()
       || savedAppearance.shadow;
-    const reuseNormalAppearance = newChatPage && Boolean(savedAppearance.background);
-    const background = reuseNormalAppearance
-      ? savedAppearance.background
-      : opaqueColor(composerBackground(root, mount.layoutRoot));
-    const radius = reuseNormalAppearance
-      ? savedAppearance.radius || "25px"
-      : transparentColor(style.backgroundColor)
-        ? previousRadius || "25px"
-        : style.borderRadius || previousRadius || "25px";
-    const shadow = reuseNormalAppearance ? savedAppearance.shadow : style.boxShadow;
-    if (!newChatPage) {
-      state.normalComposerAppearance = { background, radius, shadow };
-    }
+    const fallback = { background: previousBackground, radius: previousRadius, shadow: previousShadow };
+    const measured = measureComposerAppearance(root, mount.layoutRoot, fallback);
+    const appearanceKey = composerAppearanceKey(mount.layoutRoot);
+    const newChatPage = detectNewChatPage();
+    const cached = cachedComposerAppearance(appearanceKey);
+    const appearance = newChatPage && cached ? cached : measured;
+    const { background, radius, shadow } = appearance;
+    if (!newChatPage) saveComposerAppearance(appearanceKey, measured);
+    state.normalComposerAppearance = appearance;
     const properties = {
       "--codex-hud-composer-bg": background,
       "--codex-hud-composer-radius": radius,

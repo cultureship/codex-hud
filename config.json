@@ -1,11 +1,11 @@
 {
   "debugPort": 9335,
   "pollIntervalMs": 2000,
-  "hotReload": true,
+  "hotReload": false,
   "cleanupOldLogs": true,
   "cleanupOldLedger": true,
   "uiTemplate": 2,
-  "transparent": false,
+  "transparent": true,
   "priceMultiplier": 0.15,
   "activeTurnColor": "#f59e0b",
   "longContextThresholdTokens": 272000,
