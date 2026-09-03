@@ -465,7 +465,10 @@ function Send-CdpCommand($socket, [int]$id, [string]$method, $parameters) {
 }
 
 $sessionRoot = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\sessions"
+$archivedSessionRoot = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\archived_sessions"
+$sessionSearchRoots = @($sessionRoot, $archivedSessionRoot)
 $rolloutPathCache = @{}
+$rolloutPathCacheCheckedAt = @{}
 $rolloutSnapshotCache = @{}
 $ledgerPath = Join-Path $scriptDir "usage-ledger.json"
 $ledgerSources = @{}
@@ -690,20 +693,52 @@ function Get-TextSha256([string]$text) {
   }
 }
 
+function Get-RolloutFiles([string]$filter) {
+  $files = foreach ($root in $sessionSearchRoots) {
+    if (Test-Path -LiteralPath $root -PathType Container) {
+      Get-ChildItem -LiteralPath $root -Recurse -Filter $filter -File -ErrorAction SilentlyContinue
+    }
+  }
+  return @($files)
+}
+
+function Get-RolloutSegmentIdFromFile([string]$path) {
+  $match = [Regex]::Match([IO.Path]::GetFileName($path), "([0-9a-fA-F-]{36})\.jsonl$")
+  if (-not $match.Success) { return "" }
+  return $match.Groups[1].Value
+}
+
 function Find-RolloutFile([string]$threadId) {
   if ($threadId -notmatch "^[0-9a-fA-F-]{36}$" -or -not (Test-Path -LiteralPath $sessionRoot -PathType Container)) {
     return $null
   }
+  $now = [DateTime]::UtcNow
   if ($rolloutPathCache.ContainsKey($threadId)) {
     $cachedPath = [string]$rolloutPathCache[$threadId]
-    if (Test-Path -LiteralPath $cachedPath -PathType Leaf) { return $cachedPath }
+    $checkedAt = if ($rolloutPathCacheCheckedAt.ContainsKey($threadId)) {
+      [DateTime]$rolloutPathCacheCheckedAt[$threadId]
+    } else {
+      [DateTime]::MinValue
+    }
+    if (
+      (Test-Path -LiteralPath $cachedPath -PathType Leaf) -and
+      ($now - $checkedAt).TotalMilliseconds -lt $pollIntervalMs
+    ) {
+      return $cachedPath
+    }
     $rolloutPathCache.Remove($threadId)
+    $rolloutPathCacheCheckedAt.Remove($threadId)
   }
-  $file = Get-ChildItem -LiteralPath $sessionRoot -Recurse -Filter "rollout-*$threadId*.jsonl" -File -ErrorAction SilentlyContinue |
+  $file = Get-RolloutFiles "rollout-*$threadId*.jsonl" |
+    Where-Object {
+      $meta = Get-RolloutSessionMeta $_.FullName
+      $meta -and [string]::Equals([string]$meta.session_id, $threadId, [StringComparison]::OrdinalIgnoreCase)
+    } |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
   if ($file) {
     $rolloutPathCache[$threadId] = $file.FullName
+    $rolloutPathCacheCheckedAt[$threadId] = $now
     return $file.FullName
   }
   return $null
@@ -853,15 +888,15 @@ function Get-RolloutThreadIdFromFile([string]$path) {
 
 function Find-RolloutHistoryFile([string]$currentPath, [string]$threadId, [long]$minimumLength) {
   if ($threadId -notmatch "^[0-9a-fA-F-]{36}$") { return $null }
-  $candidates = Get-ChildItem -LiteralPath $sessionRoot -Recurse -Filter "rollout-*$threadId*.jsonl" -File -ErrorAction SilentlyContinue |
+  $candidates = Get-RolloutFiles "rollout-*$threadId*.jsonl" |
     Where-Object {
       -not [string]::Equals($_.FullName, $currentPath, [StringComparison]::OrdinalIgnoreCase) -and
+      [string]::Equals((Get-RolloutSegmentIdFromFile $_.FullName), $threadId, [StringComparison]::OrdinalIgnoreCase) -and
       ($minimumLength -le 0 -or [long]$_.Length -ge $minimumLength)
     } |
     Sort-Object LastWriteTime -Descending
   foreach ($candidate in $candidates) {
-    $meta = Get-RolloutSessionMeta $candidate.FullName
-    if ($meta -and [string]$meta.session_id -eq $threadId) { return $candidate.FullName }
+    return $candidate.FullName
   }
   return $null
 }
@@ -1218,12 +1253,12 @@ try {
         foreach ($rolloutEvent in @(Get-Event -SourceIdentifier $sourceIdentifier -ErrorAction SilentlyContinue)) {
           $changedPath = [string]$rolloutEvent.SourceEventArgs.FullPath
           Remove-Event -EventIdentifier $rolloutEvent.EventIdentifier -ErrorAction SilentlyContinue
-          if ($lastLoggedThreadId -and $changedPath.IndexOf($lastLoggedThreadId, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-            $rolloutSyncPending = $true
-            $rolloutSyncDue = [DateTime]::UtcNow.AddMilliseconds(100)
-          } elseif ($sourceIdentifier -eq $rolloutEventSources[1]) {
+          if ($sourceIdentifier -eq $rolloutEventSources[1]) {
             $rolloutSyncPending = $true
             $rolloutSyncPath = $changedPath
+            $rolloutSyncDue = [DateTime]::UtcNow.AddMilliseconds(100)
+          } elseif ($lastLoggedThreadId -and $changedPath.IndexOf($lastLoggedThreadId, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            $rolloutSyncPending = $true
             $rolloutSyncDue = [DateTime]::UtcNow.AddMilliseconds(100)
           }
         }
@@ -1234,6 +1269,10 @@ try {
           if ($rolloutSyncPath -and -not $preferredThreadId) {
             $rolloutSyncDue = [DateTime]::UtcNow.AddMilliseconds(100)
             continue
+          }
+          if ($rolloutSyncPath -and $preferredThreadId) {
+            $rolloutPathCache[$preferredThreadId] = $rolloutSyncPath
+            $rolloutPathCacheCheckedAt[$preferredThreadId] = [DateTime]::UtcNow
           }
           $eventSync = Install-Hud ([string]$target.webSocketDebuggerUrl) $hudSource $false $false $debugPort $lastLoggedThreadId $preferredThreadId
           if ($eventSync.ThreadId) {

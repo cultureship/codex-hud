@@ -1,6 +1,6 @@
 {
   "debugPort": 9335,
-  "pollIntervalMs": 2000,
+  "pollIntervalMs": 1000,
   "hotReload": false,
   "cleanupOldLogs": true,
   "cleanupOldLedger": true,
