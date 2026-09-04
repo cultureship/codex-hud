@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.5.42";
+  const VERSION = "0.5.43";
   const CONFIG = __CODEX_HUD_CONFIG__;
   const CONFIG_KEY = JSON.stringify(CONFIG);
   const ROOT_ID = "codex-hud-root";
@@ -646,6 +646,7 @@
   function detectNewChatPage() {
     if (!visibleComposerEditor()) return false;
     if (state.newChatIntent) return true;
+    if (!selectedThreadId() && !state.activeThreadId) return true;
     if (detectGenerating() || state.rolloutTurnActive === true) return false;
     if (visibleChooseProject()) return true;
     const chatActions = [...document.querySelectorAll('button[aria-label="Chat actions"], button[aria-label="聊天操作"]')]
