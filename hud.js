@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const VERSION = "0.5.43";
+  const VERSION = "0.5.45";
   const CONFIG = __CODEX_HUD_CONFIG__;
   const CONFIG_KEY = JSON.stringify(CONFIG);
   const ROOT_ID = "codex-hud-root";
@@ -25,10 +25,13 @@
     model: "",
     current: emptyUsage(),
     currentPricingUsage: emptyPricingUsage(),
+    currentModelPricingUsage: null,
     lastCompleted: emptyUsage(),
     lastCompletedPricingUsage: emptyPricingUsage(),
+    lastCompletedModelPricingUsage: null,
     session: emptyUsage(),
     sessionPricingUsage: null,
+    sessionModelPricingUsage: null,
     sessionAvailable: false,
     activeThreadId: "",
     todayCost: null,
@@ -107,6 +110,23 @@
     return standard && longContext ? { standard, longContext } : null;
   }
 
+  function normalizeModelPricingUsage(source) {
+    if (!source || typeof source !== "object") return null;
+    const result = {};
+    for (const [model, usage] of Object.entries(source)) {
+      const normalized = normalizePricingUsage(usage);
+      if (normalized) result[model] = normalized;
+    }
+    return Object.keys(result).length ? result : null;
+  }
+
+  function addModelPricingUsage(target, model, usage) {
+    if (!model) return target;
+    const next = { ...(target || {}) };
+    next[model] = addPricingUsage(next[model] || emptyPricingUsage(), usage);
+    return next;
+  }
+
   function addUsage(target, usage) {
     return {
       input: target.input + usage.input,
@@ -130,10 +150,13 @@
   function resetThreadUsage() {
     state.current = emptyUsage();
     state.currentPricingUsage = emptyPricingUsage();
+    state.currentModelPricingUsage = null;
     state.lastCompleted = emptyUsage();
     state.lastCompletedPricingUsage = emptyPricingUsage();
+    state.lastCompletedModelPricingUsage = null;
     state.session = emptyUsage();
     state.sessionPricingUsage = null;
+    state.sessionModelPricingUsage = null;
     state.sessionAvailable = false;
     state.turnHasUsage = false;
     state.turnId = "";
@@ -208,7 +231,9 @@
 
       const hudContext = node.__codex_hud_context;
       if (hudContext && typeof hudContext === "object") {
-        const nextThreadId = String(hudContext.thread_id || "");
+        const rawThreadId = String(hudContext.thread_id || "");
+        const nextThreadId = /^[0-9a-f-]{36}$/i.test(rawThreadId) ? rawThreadId : "";
+        if (!nextThreadId && rawThreadId.startsWith("client-new-thread:")) return;
         const threadChanged = nextThreadId !== state.activeThreadId;
         if (threadChanged) {
           resetThreadUsage();
@@ -231,6 +256,7 @@
           rememberCurrentTurn();
           state.current = emptyUsage();
           state.currentPricingUsage = emptyPricingUsage();
+          state.currentModelPricingUsage = null;
           state.turnHasUsage = false;
         }
         state.turnId = turnId;
@@ -249,7 +275,19 @@
         }
       }
 
-      const tokenNode = nodeType === "token_count" ? node : null;
+      const tokenNode = nodeType === "token_count"
+        ? node
+        : nodeType === "token_usage_record" && (node.usage || node.turn_token_usage)
+          ? {
+              type: "token_count",
+              info: {
+                last_token_usage: node.usage,
+                total_token_usage: node.thread_token_usage || node.usage,
+                current_turn_active: true,
+                current_turn_id: node.turn_id || "",
+              },
+            }
+          : null;
       if (tokenNode?.info && typeof tokenNode.info === "object") {
         const previousSessionTotal = state.session.total;
         const lastRequest = normalizeUsage(
@@ -261,11 +299,17 @@
         const pricingUsage = normalizePricingUsage(
           tokenNode.info.pricing_tier_usage || tokenNode.info.pricingTierUsage,
         );
+        const modelPricingUsage = normalizeModelPricingUsage(
+          tokenNode.info.model_pricing_usage || tokenNode.info.modelPricingUsage,
+        );
         const currentTurn = normalizeUsage(
           tokenNode.info.current_turn_usage || tokenNode.info.currentTurnUsage,
         );
         const currentTurnPricing = normalizePricingUsage(
           tokenNode.info.current_turn_pricing_usage || tokenNode.info.currentTurnPricingUsage,
+        );
+        const currentTurnModelPricing = normalizeModelPricingUsage(
+          tokenNode.info.current_turn_model_pricing_usage || tokenNode.info.currentTurnModelPricingUsage,
         );
         const lastCompletedTurn = normalizeUsage(
           tokenNode.info.last_completed_turn_usage || tokenNode.info.lastCompletedTurnUsage,
@@ -273,9 +317,13 @@
         const lastCompletedTurnPricing = normalizePricingUsage(
           tokenNode.info.last_completed_turn_pricing_usage || tokenNode.info.lastCompletedTurnPricingUsage,
         );
+        const lastCompletedTurnModelPricing = normalizeModelPricingUsage(
+          tokenNode.info.last_completed_turn_model_pricing_usage || tokenNode.info.lastCompletedTurnModelPricingUsage,
+        );
         if (lastCompletedTurn?.total > 0) {
           state.lastCompleted = lastCompletedTurn;
           state.lastCompletedPricingUsage = lastCompletedTurnPricing || emptyPricingUsage();
+          state.lastCompletedModelPricingUsage = lastCompletedTurnModelPricing;
         }
         const hasCurrentTurnActive = Object.prototype.hasOwnProperty.call(tokenNode.info, "current_turn_active")
           || Object.prototype.hasOwnProperty.call(tokenNode.info, "currentTurnActive");
@@ -290,6 +338,7 @@
         if (currentTurn && !staleCompletedSnapshot) {
           state.current = currentTurn;
           state.currentPricingUsage = currentTurnPricing || emptyPricingUsage();
+          state.currentModelPricingUsage = currentTurnModelPricing;
           state.turnHasUsage = currentTurn.total > 0;
           state.turnId = snapshotTurnId || state.turnId;
           if (hasCurrentTurnActive) {
@@ -305,9 +354,11 @@
           if (state.generating) {
             state.current = addUsage(state.current, lastRequest);
             state.currentPricingUsage = addPricingUsage(state.currentPricingUsage, lastRequest);
+            state.currentModelPricingUsage = addModelPricingUsage(state.currentModelPricingUsage, state.model, lastRequest);
           } else {
             state.current = lastRequest;
             state.currentPricingUsage = addPricingUsage(emptyPricingUsage(), lastRequest);
+            state.currentModelPricingUsage = addModelPricingUsage(null, state.model, lastRequest);
           }
           state.turnHasUsage = true;
           changed = true;
@@ -319,10 +370,13 @@
         }
         if (pricingUsage) {
           state.sessionPricingUsage = pricingUsage;
+          state.sessionModelPricingUsage = modelPricingUsage;
         } else if (lastRequest && session && state.sessionPricingUsage && session.total > previousSessionTotal) {
           state.sessionPricingUsage = addPricingUsage(state.sessionPricingUsage, lastRequest);
+          state.sessionModelPricingUsage = addModelPricingUsage(state.sessionModelPricingUsage, state.model, lastRequest);
         } else if (session && session.total < previousSessionTotal) {
           state.sessionPricingUsage = null;
+          state.sessionModelPricingUsage = null;
         }
       }
 
@@ -345,10 +399,12 @@
     return String(number);
   }
 
-  function normalizedModel() {
-    const model = state.model.toLowerCase();
+  function normalizedModel(modelName = state.model) {
+    const model = modelName.toLowerCase();
     if (CONFIG.prices?.[model]) return model;
-    return Object.keys(CONFIG.prices || {}).find((key) => model === key || model.startsWith(`${key}-`)) || "";
+    return Object.keys(CONFIG.prices || {})
+      .filter((key) => model.startsWith(`${key}-`))
+      .sort((a, b) => b.length - a.length)[0] || "";
   }
 
   function rawUsageCost(usage, price) {
@@ -361,13 +417,26 @@
     ) / 1_000_000;
   }
 
-  function usageCost(usage, pricingUsage = null) {
+  function usageCost(usage, pricingUsage = null, modelPricingUsage = null) {
     const price = CONFIG.prices?.[normalizedModel()];
-    if (!price) return null;
     const configuredMultiplier = Number(CONFIG.priceMultiplier ?? 1);
     const multiplier = Number.isFinite(configuredMultiplier) && configuredMultiplier >= 0
       ? configuredMultiplier
       : 1;
+    const modelUsageTotal = modelPricingUsage
+      ? Object.values(modelPricingUsage).reduce((total, entry) => total + entry.standard.total + entry.longContext.total, 0)
+      : 0;
+    if (modelPricingUsage && modelUsageTotal === usage.total) {
+      let total = 0;
+      for (const [model, modelUsage] of Object.entries(modelPricingUsage)) {
+        const modelPrice = CONFIG.prices?.[normalizedModel(model)];
+        if (!modelPrice) continue;
+        total += rawUsageCost(modelUsage.standard, modelPrice)
+          + rawUsageCost(modelUsage.longContext, modelPrice.longContext || modelPrice);
+      }
+      return multiplier * total;
+    }
+    if (!price) return null;
     if (pricingUsage) {
       return multiplier * (
         rawUsageCost(pricingUsage.standard, price) +
@@ -909,6 +978,7 @@
       standard: { ...state.currentPricingUsage.standard },
       longContext: { ...state.currentPricingUsage.longContext },
     };
+    state.lastCompletedModelPricingUsage = state.currentModelPricingUsage;
   }
 
   function composerHasDraft() {
@@ -928,6 +998,7 @@
         standard: { ...state.lastCompletedPricingUsage.standard },
         longContext: { ...state.lastCompletedPricingUsage.longContext },
       };
+      state.currentModelPricingUsage = state.lastCompletedModelPricingUsage;
       state.turnHasUsage = true;
     }
     state.generating = false;
@@ -969,6 +1040,7 @@
     rememberCurrentTurn();
     state.current = emptyUsage();
     state.currentPricingUsage = emptyPricingUsage();
+    state.currentModelPricingUsage = null;
     state.turnHasUsage = false;
     state.turnId = "";
     state.generating = true;
@@ -995,8 +1067,8 @@
     setValue(root, "turn-output", newChatPage || turnUnavailable ? "--" : waitingForUsage ? "..." : formatCount(state.current.output));
     setValue(root, "session-total", newChatPage || sessionUnavailable ? "--" : formatCount(state.session.total));
     setValue(root, "cache-rate", newChatPage || sessionUnavailable ? "--" : cachePercent(state.session));
-    setValue(root, "turn-cost", newChatPage || turnUnavailable ? "--" : waitingForUsage ? "..." : formatMoney(usageCost(state.current, state.currentPricingUsage)));
-    setValue(root, "session-cost", newChatPage || sessionUnavailable ? "--" : formatMoney(usageCost(state.session, state.sessionPricingUsage)));
+    setValue(root, "turn-cost", newChatPage || turnUnavailable ? "--" : waitingForUsage ? "..." : formatMoney(usageCost(state.current, state.currentPricingUsage, state.currentModelPricingUsage)));
+    setValue(root, "session-cost", newChatPage || sessionUnavailable ? "--" : formatMoney(usageCost(state.session, state.sessionPricingUsage, state.sessionModelPricingUsage)));
     setValue(root, "today-cost", formatMoney(state.todayCost));
     setValue(root, "week-cost", formatMoney(state.weekCost));
   }

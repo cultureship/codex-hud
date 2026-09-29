@@ -1,4 +1,5 @@
 {
+  "version": 2.0
   "debugPort": 9335,
   "pollIntervalMs": 1000,
   "hotReload": false,
@@ -6,11 +7,21 @@
   "cleanupOldLedger": true,
   "uiTemplate": 2,
   "transparent": true,
-  "priceMultiplier": 0.15,
+  "priceMultiplier": 0.17,
   "activeTurnColor": "#f59e0b",
   "longContextThresholdTokens": 272000,
   "codexPath": "",
   "prices": {
+    "gpt-6-sol": {
+      "input": 2.0,
+      "cachedInput": 0.2,
+      "output": 10.0,
+      "longContext": {
+        "input": 4.0,
+        "cachedInput": 0.4,
+        "output": 18.0
+      }
+    },
     "gpt-6-astra": {
       "input": 18.0,
       "cachedInput": 1.8,

@@ -466,6 +466,8 @@ function Send-CdpCommand($socket, [int]$id, [string]$method, $parameters) {
 
 $sessionRoot = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\sessions"
 $archivedSessionRoot = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\archived_sessions"
+$globalStatePath = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex\.codex-global-state.json"
+$clientThreadBindings = @{}
 $sessionSearchRoots = @($sessionRoot, $archivedSessionRoot)
 $rolloutPathCache = @{}
 $rolloutPathCacheCheckedAt = @{}
@@ -475,6 +477,7 @@ $ledgerSources = @{}
 $ledgerRecords = New-Object System.Collections.ArrayList
 $ledgerKeys = @{}
 $ledgerNeedsSave = $false
+$ledgerNeedsRebuild = $false
 $costSummary = @{ today = [double]0; week = [double]0 }
 $rolloutWatcher = $null
 $rolloutEventSources = @("CodexHud.RolloutChanged", "CodexHud.RolloutCreated")
@@ -498,7 +501,7 @@ function Test-LedgerTimestampRetained([string]$timestamp) {
 function Initialize-UsageLedger {
   if (-not (Test-Path -LiteralPath $ledgerPath -PathType Leaf)) { return }
   $loaded = Get-Content -Raw -Encoding UTF8 -LiteralPath $ledgerPath | ConvertFrom-Json
-  if ([int]$loaded.version -lt 2) { $script:ledgerNeedsSave = $true }
+  if ([int]$loaded.version -lt 3) { $script:ledgerNeedsRebuild = $true }
   if ($loaded.sources) {
     foreach ($property in $loaded.sources.PSObject.Properties) {
       $ledgerSources[$property.Name] = [long]$property.Value
@@ -525,7 +528,7 @@ function Initialize-UsageLedger {
 
 function Save-UsageLedger {
   $document = @{
-    version = 2
+    version = 3
     sources = $ledgerSources
     records = @($ledgerRecords.ToArray())
   }
@@ -555,11 +558,22 @@ function Import-RolloutUsage($file) {
           $row = $line | ConvertFrom-Json
           if ($row.payload.model) { $model = [string]$row.payload.model }
         } catch {}
-      } elseif ($line.IndexOf('"type":"token_count"', [StringComparison]::Ordinal) -ge 0) {
+      } elseif (
+        $line.IndexOf('"type":"token_count"', [StringComparison]::Ordinal) -ge 0 -or
+        $line.IndexOf('"type":"token_usage_record"', [StringComparison]::Ordinal) -ge 0
+      ) {
         try {
           $row = $line | ConvertFrom-Json
-          $lastUsage = $row.payload.info.last_token_usage
-          $totalUsage = $row.payload.info.total_token_usage
+          $lastUsage = if ($row.type -eq "token_usage_record") {
+            $row.payload.usage
+          } else {
+            $row.payload.info.last_token_usage
+          }
+          $totalUsage = if ($row.type -eq "token_usage_record") {
+            if ($row.payload.thread_token_usage) { $row.payload.thread_token_usage } else { $row.payload.usage }
+          } else {
+            $row.payload.info.total_token_usage
+          }
           if (-not $lastUsage -or -not $totalUsage -or -not $model) { continue }
           if (-not (Test-LedgerTimestampRetained ([string]$row.timestamp))) { continue }
           $key = "${threadId}:$([long]$totalUsage.total_tokens)"
@@ -594,11 +608,12 @@ function Get-ConfiguredPrice([string]$model, [long]$inputTokens) {
     }
   }
   if ($null -eq $price) {
+    $longestMatch = 0
     foreach ($property in $config.prices.PSObject.Properties) {
       $key = $property.Name.ToLowerInvariant()
-      if ($modelName.StartsWith("$key-", [StringComparison]::Ordinal)) {
+      if ($key.Length -gt $longestMatch -and $modelName.StartsWith("$key-", [StringComparison]::Ordinal)) {
         $price = $property.Value
-        break
+        $longestMatch = $key.Length
       }
     }
   }
@@ -658,6 +673,28 @@ function Sync-UsageLedger {
   $changed = $false
   if (Test-Path -LiteralPath $sessionRoot -PathType Container) {
     $files = Get-ChildItem -LiteralPath $sessionRoot -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue
+    if ($ledgerNeedsRebuild -and @($files).Count -gt 0) {
+      $backupPath = "$ledgerPath.v2.bak"
+      if ((Test-Path -LiteralPath $ledgerPath -PathType Leaf) -and -not (Test-Path -LiteralPath $backupPath)) {
+        Copy-Item -LiteralPath $ledgerPath -Destination $backupPath
+      }
+      $sourceIds = @{}
+      foreach ($file in $files) {
+        $match = [Regex]::Match($file.Name, "([0-9a-fA-F-]{36})\.jsonl$")
+        if ($match.Success) { $sourceIds[$match.Groups[1].Value.ToLowerInvariant()] = $true }
+        $ledgerSources.Remove($file.FullName)
+      }
+      for ($index = $ledgerRecords.Count - 1; $index -ge 0; $index--) {
+        $record = $ledgerRecords[$index]
+        $sourceId = ([string]$record.key).Split(':')[0].ToLowerInvariant()
+        if ($sourceIds.ContainsKey($sourceId)) {
+          $ledgerKeys.Remove([string]$record.key)
+          $ledgerRecords.RemoveAt($index)
+        }
+      }
+      $script:ledgerNeedsRebuild = $false
+      $script:ledgerNeedsSave = $true
+    }
     foreach ($file in $files) {
       $knownLength = if ($ledgerSources.ContainsKey($file.FullName)) { [long]$ledgerSources[$file.FullName] } else { [long]-1 }
       if ($knownLength -eq [long]$file.Length) { continue }
@@ -666,7 +703,7 @@ function Sync-UsageLedger {
       $changed = $true
     }
   }
-  if ($changed -or $ledgerNeedsSave) {
+  if ($changed -or ($ledgerNeedsSave -and -not $ledgerNeedsRebuild)) {
     Save-UsageLedger
     $script:ledgerNeedsSave = $false
   }
@@ -681,6 +718,22 @@ function Get-CdpValue($response) {
   $value = $inner.Value.PSObject.Properties["value"]
   if ($null -eq $value) { return $null }
   return $value.Value
+}
+
+function Resolve-ClientThreadId([string]$clientId) {
+  if ($clientThreadBindings.ContainsKey($clientId)) { return [string]$clientThreadBindings[$clientId] }
+  if (-not (Test-Path -LiteralPath $globalStatePath -PathType Leaf)) { return "" }
+  try {
+    $globalState = Get-Content -Raw -Encoding UTF8 -LiteralPath $globalStatePath | ConvertFrom-Json
+    $bindings = $globalState.'electron-persisted-atom-state'.'client-thread-bindings-v1'
+    $binding = $bindings.PSObject.Properties[$clientId]
+    $threadId = if ($binding) { [string]$binding.Value } else { "" }
+    if ($threadId -match "^[0-9a-fA-F-]{36}$") {
+      $clientThreadBindings[$clientId] = $threadId
+      return $threadId
+    }
+  } catch {}
+  return ""
 }
 
 function Get-TextSha256([string]$text) {
@@ -752,6 +805,18 @@ function New-PricingUsageTable {
   return @{ standard = New-UsageTable; long_context = New-UsageTable }
 }
 
+function Add-ModelPricingUsage($table, [string]$model, [string]$tierName, $usage) {
+  if (-not $model) { return }
+  if (-not $table.ContainsKey($model)) { $table[$model] = New-PricingUsageTable }
+  Add-UsageToTable $table[$model][$tierName] $usage
+}
+
+function Copy-ModelPricingUsageTable($source) {
+  $copy = @{}
+  foreach ($model in $source.Keys) { $copy[$model] = Copy-PricingUsageTable $source[$model] }
+  return $copy
+}
+
 function New-RolloutParserState {
   return @{
     Offset = [long]0
@@ -759,12 +824,15 @@ function New-RolloutParserState {
     LastModel = ""
     LastCumulativeTotal = [long]-1
     TieredUsage = New-PricingUsageTable
+    ModelTieredUsage = @{}
     CurrentTurnId = ""
     CurrentTurnActive = $false
     CurrentTurnUsage = New-UsageTable
     CurrentTurnPricingUsage = New-PricingUsageTable
+    CurrentTurnModelPricingUsage = @{}
     LastCompletedTurnUsage = New-UsageTable
     LastCompletedTurnPricingUsage = New-PricingUsageTable
+    LastCompletedTurnModelPricingUsage = @{}
   }
 }
 
@@ -800,6 +868,7 @@ function Update-RolloutParserState($state, [string]$line) {
         $state.CurrentTurnActive = $true
         $state.CurrentTurnUsage = New-UsageTable
         $state.CurrentTurnPricingUsage = New-PricingUsageTable
+        $state.CurrentTurnModelPricingUsage = @{}
       }
     } catch {}
   } elseif (
@@ -812,9 +881,52 @@ function Update-RolloutParserState($state, [string]$line) {
         if ([long]$state.CurrentTurnUsage.total_tokens -gt 0) {
           $state.LastCompletedTurnUsage = Copy-UsageTable $state.CurrentTurnUsage
           $state.LastCompletedTurnPricingUsage = Copy-PricingUsageTable $state.CurrentTurnPricingUsage
+          $state.LastCompletedTurnModelPricingUsage = Copy-ModelPricingUsageTable $state.CurrentTurnModelPricingUsage
         }
         $state.CurrentTurnActive = $false
       }
+    } catch {}
+  } elseif ($line.IndexOf('"type":"token_usage_record"', [StringComparison]::Ordinal) -ge 0) {
+    try {
+      $row = $line | ConvertFrom-Json
+      $record = $row.payload
+      $lastUsage = $record.usage
+      $totalUsage = if ($record.thread_token_usage) { $record.thread_token_usage } else { $record.usage }
+      if (-not $lastUsage -or -not $totalUsage) { return }
+      $state.LastToken = [pscustomobject]@{
+        type = "token_count"
+        info = [pscustomobject]@{
+          last_token_usage = $lastUsage
+          total_token_usage = $totalUsage
+        }
+      }
+      if (-not $state.CurrentTurnId -and $record.turn_id) {
+        $state.CurrentTurnId = [string]$record.turn_id
+        $state.CurrentTurnActive = $true
+      }
+      $cumulativeTotal = [long]$totalUsage.total_tokens
+      if ($cumulativeTotal -eq $state.LastCumulativeTotal) { return }
+      if ([long]$state.LastCumulativeTotal -lt 0) {
+        $baseline = @{
+          input_tokens = [Math]::Max([long]0, [long]$totalUsage.input_tokens - [long]$lastUsage.input_tokens)
+          cached_input_tokens = [Math]::Max([long]0, [long]$totalUsage.cached_input_tokens - [long]$lastUsage.cached_input_tokens)
+          output_tokens = [Math]::Max([long]0, [long]$totalUsage.output_tokens - [long]$lastUsage.output_tokens)
+          total_tokens = [Math]::Max([long]0, $cumulativeTotal - [long]$lastUsage.total_tokens)
+        }
+        if ([long]$baseline.total_tokens -gt 0) {
+          Add-UsageToTable $state.TieredUsage.standard $baseline
+          Add-ModelPricingUsage $state.ModelTieredUsage $state.LastModel "standard" $baseline
+        }
+      }
+      $tierName = if ([long]$lastUsage.input_tokens -gt $longContextThresholdTokens) { "long_context" } else { "standard" }
+      Add-UsageToTable $state.TieredUsage[$tierName] $lastUsage
+      Add-ModelPricingUsage $state.ModelTieredUsage $state.LastModel $tierName $lastUsage
+      if ($state.CurrentTurnId) {
+        Add-UsageToTable $state.CurrentTurnUsage $lastUsage
+        Add-UsageToTable $state.CurrentTurnPricingUsage[$tierName] $lastUsage
+        Add-ModelPricingUsage $state.CurrentTurnModelPricingUsage $state.LastModel $tierName $lastUsage
+      }
+      $state.LastCumulativeTotal = $cumulativeTotal
     } catch {}
   } elseif ($line.IndexOf('"type":"token_count"', [StringComparison]::Ordinal) -ge 0) {
     try {
@@ -836,13 +948,16 @@ function Update-RolloutParserState($state, [string]$line) {
         if ([long]$baseline.total_tokens -gt 0) {
           # A missing/deleted history base has no request boundaries, so retain its cumulative usage in the standard tier.
           Add-UsageToTable $state.TieredUsage.standard $baseline
+          Add-ModelPricingUsage $state.ModelTieredUsage $state.LastModel "standard" $baseline
         }
       }
       $tierName = if ([long]$lastUsage.input_tokens -gt $longContextThresholdTokens) { "long_context" } else { "standard" }
       Add-UsageToTable $state.TieredUsage[$tierName] $lastUsage
+      Add-ModelPricingUsage $state.ModelTieredUsage $state.LastModel $tierName $lastUsage
       if ($state.CurrentTurnId) {
         Add-UsageToTable $state.CurrentTurnUsage $lastUsage
         Add-UsageToTable $state.CurrentTurnPricingUsage[$tierName] $lastUsage
+        Add-ModelPricingUsage $state.CurrentTurnModelPricingUsage $state.LastModel $tierName $lastUsage
       }
       $state.LastCumulativeTotal = $cumulativeTotal
     } catch {}
@@ -985,10 +1100,13 @@ function Initialize-RolloutParserHistory($state, [string]$path) {
 function New-RolloutSnapshot($state) {
   if (-not $state.LastToken) { return $null }
   $state.LastToken.info | Add-Member -NotePropertyName pricing_tier_usage -NotePropertyValue $state.TieredUsage -Force
+  $state.LastToken.info | Add-Member -NotePropertyName model_pricing_usage -NotePropertyValue $state.ModelTieredUsage -Force
   $state.LastToken.info | Add-Member -NotePropertyName current_turn_usage -NotePropertyValue $state.CurrentTurnUsage -Force
   $state.LastToken.info | Add-Member -NotePropertyName current_turn_pricing_usage -NotePropertyValue $state.CurrentTurnPricingUsage -Force
+  $state.LastToken.info | Add-Member -NotePropertyName current_turn_model_pricing_usage -NotePropertyValue $state.CurrentTurnModelPricingUsage -Force
   $state.LastToken.info | Add-Member -NotePropertyName last_completed_turn_usage -NotePropertyValue $state.LastCompletedTurnUsage -Force
   $state.LastToken.info | Add-Member -NotePropertyName last_completed_turn_pricing_usage -NotePropertyValue $state.LastCompletedTurnPricingUsage -Force
+  $state.LastToken.info | Add-Member -NotePropertyName last_completed_turn_model_pricing_usage -NotePropertyValue $state.LastCompletedTurnModelPricingUsage -Force
   $state.LastToken.info | Add-Member -NotePropertyName current_turn_active -NotePropertyValue $state.CurrentTurnActive -Force
   $state.LastToken.info | Add-Member -NotePropertyName current_turn_id -NotePropertyValue $state.CurrentTurnId -Force
   return @{ model = $state.LastModel; payload = $state.LastToken }
@@ -1090,10 +1208,16 @@ function Install-Hud(
       expression = 'document.querySelector(''[data-app-action-sidebar-thread-selected="true"][data-app-action-sidebar-thread-id]'')?.getAttribute(''data-app-action-sidebar-thread-id'')?.replace(/^local:/, '''') || '''''
       returnByValue = $true
     }
-    $threadId = [string](Get-CdpValue $threadResponse)
+    $rawThreadId = [string](Get-CdpValue $threadResponse)
+    $threadId = if ($rawThreadId -match "^[0-9a-fA-F-]{36}$") { $rawThreadId } else { "" }
     if ($preferredThreadId -match "^[0-9a-fA-F-]{36}$") {
       $threadId = $preferredThreadId
-    } elseif (-not $threadId -and $fallbackThreadId) {
+      if ($rawThreadId.StartsWith("client-new-thread:", [StringComparison]::Ordinal)) {
+        $clientThreadBindings[$rawThreadId] = $threadId
+      }
+    } elseif ($rawThreadId.StartsWith("client-new-thread:", [StringComparison]::Ordinal)) {
+      $threadId = Resolve-ClientThreadId $rawThreadId
+    } elseif (-not $rawThreadId -and $fallbackThreadId -match "^[0-9a-fA-F-]{36}$") {
       $threadId = $fallbackThreadId
     }
     $snapshot = Get-RolloutSnapshot $threadId

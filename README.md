@@ -101,10 +101,13 @@ New chat 始终使用不透明样式
    ```
 
 2. 如果 Codex 已经运行但没有启用 CDP，需要先完全退出
-3. 双击 `start-codex-hud.vbs`
+3. 可直接双击 `start-codex-hud.vbs`；如果使用托盘版，运行 `build-tray.ps1` 构建 `CodexHud.Tray.exe` 后，双击该 exe
 4. 启动器以隐藏窗口运行，并使用 `127.0.0.1` 上的 CDP 启动或附加 Codex
 
 如果 Codex 已经由其他本地启动器使用同一 CDP 端口启动，本项目会直接附加该实例
+
+托盘版会在通知区域显示 `Codex HUD` 菜单，提供重启、停止、打开日志和打开项目目录。托盘 exe 应与
+`codex-hud.ps1`、`hud.js`、`config.json` 放在同一目录；它不会替换现有启动器逻辑。
 
 如果只想附加已经启用 CDP 的 Codex，可以双击 `attach-codex-hud.vbs`
 这个入口不会启动 Codex，目标实例不存在或未启用 CDP 时会直接退出并将原因写入 `launcher.log`
@@ -162,7 +165,7 @@ New chat 始终使用不透明样式
 1. 启动器使用仅绑定到 `127.0.0.1` 的 CDP 启动或附加 Codex
 2. 侧栏监听器取得当前选中会话的 ID，创建新会话时也会从新 rollout 的 `session_id` 直接完成绑定
 3. 启动器从用户目录下的 `.codex/sessions` 定位对应 `rollout-*.jsonl`
-4. 解析器只提取模型、轮次状态和 `token_count` 数据，并维护增量读取位置
+4. 解析器提取模型、轮次状态及 `token_count` / `token_usage_record` 数据，并维护增量读取位置
 5. 分页会话会沿 `history_base` 合并计费数据，父记录已经删除时使用累计 Token 基线补齐
 6. 数据通过 CDP 传入 Codex renderer，由 `hud.js` 更新内部 HUD
 
@@ -189,6 +192,7 @@ New chat 始终使用不透明样式
 启用 `cleanupOldLogs` 时，每次启动会删除超过 7 天的日志记录
 
 `usage-ledger.json` 保存请求时间、模型、Token 分类和去重键，用于计算今日及本周费用
+旧版账本首次升级时，会从仍存在的会话日志重建对应记录，并保留 `usage-ledger.json.v2.bak` 备份；已删除会话的记录无法重新核对
 启用 `cleanupOldLedger` 时，启动器只保留本周和上周记录，自动删除上上周及更早的数据
 
 ## 排错

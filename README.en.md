@@ -164,7 +164,7 @@ They do not represent the actual bill for a ChatGPT or Codex subscription
 1. The launcher starts or attaches to Codex through CDP bound only to `127.0.0.1`
 2. A sidebar listener obtains the selected session ID, while a newly created rollout can bind directly through its `session_id`
 3. The launcher finds the matching `rollout-*.jsonl` under `.codex/sessions` in the user directory
-4. The parser extracts only the model, turn state, and `token_count` records while maintaining an incremental read position
+4. The parser extracts the model, turn state, and `token_count` / `token_usage_record` records while maintaining an incremental read position
 5. Paginated sessions merge pricing data along the `history_base` chain, with cumulative token totals used when a parent record has already been deleted
 6. The launcher sends the data to the Codex renderer through CDP, and `hud.js` updates the in-app HUD
 
@@ -190,6 +190,7 @@ File watching provides fast current-turn updates
 With `cleanupOldLogs` enabled, each launch removes entries older than seven days
 
 `usage-ledger.json` stores request timestamps, models, token categories, and deduplication keys for today and week totals
+On the first ledger upgrade, entries with surviving session logs are rebuilt and the previous ledger is kept as `usage-ledger.json.v2.bak`; entries from deleted sessions cannot be verified again
 With `cleanupOldLedger` enabled, the launcher retains only the current and previous weeks and removes older records
 
 ## Troubleshooting
