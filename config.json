@@ -1,5 +1,5 @@
 {
-  "version": 2.0
+  "version": 2.1,
   "debugPort": 9335,
   "pollIntervalMs": 1000,
   "hotReload": false,
@@ -12,6 +12,16 @@
   "longContextThresholdTokens": 272000,
   "codexPath": "",
   "prices": {
+    "gpt-6.1-sol": {
+      "input": 2.0,
+      "cachedInput": 0.2,
+      "output": 10.0,
+      "longContext": {
+        "input": 4.0,
+        "cachedInput": 0.4,
+        "output": 18.0
+      }
+    },
     "gpt-6-sol": {
       "input": 2.0,
       "cachedInput": 0.2,
